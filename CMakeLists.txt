@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8)
 
 project(ncnn_model_MICRO)
 
-set (CMAKE_CXX_STANDARD 11)
+set (CMAKE_CXX_STANDARD 17)
 add_definitions(-fno-rtti)
 # add_definitions(-frtti)
 
@@ -21,7 +21,6 @@ SET(NCNN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ncnn-shared)
 SET(NCNN_LIBS ${NCNN_DIR}/lib/libncnn.so)
 
 set(CMAKE_BUILD_TYPE release)
-set (CMAKE_CXX_STANDARD 11)
 add_definitions(-fPIC)
 
 include_directories(${OpenCV_INCLUDE_DIRS}

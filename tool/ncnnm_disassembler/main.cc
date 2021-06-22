@@ -5,6 +5,8 @@
 
 #include <glog/logging.h>
 
+#include <filesystem>
+
 #include "ncnn/net.h"
 #include "ncnn/layer_type.h"
 #include "ncnn/datareader.h"  // DataReaderFromStdio
@@ -20,8 +22,8 @@ void SignalHandle(const char *data, int size) {
 
 class GLogHelper {
  public:
-  GLogHelper(char *program) {
-    // google::InitGoogleLogging(program);
+  GLogHelper(const char *program) {
+    google::InitGoogleLogging(program);
     FLAGS_colorlogtostderr = true;
     google::InstallFailureSignalHandler();
     //默认捕捉 SIGSEGV 信号信息输出会输出到 stderr，可以通过下面的方法自定义输出方式：
@@ -29,6 +31,7 @@ class GLogHelper {
 
     google::SetLogDestination(google::GLOG_INFO, "./result_");
   }
+
   ~GLogHelper() {
     google::ShutdownGoogleLogging();
   }
@@ -681,7 +684,7 @@ int Net::load_model(const ncnn::DataReader &dr) {
   // load file
   int ret = 0;
 
-  ncnn::ModelBinFromDataReader mb(dr);
+  ncnn::ModelBinFromDataReader mb(dr);    // todo: ncnn_m::MB replace ncnn::MB
   for (size_t i = 0; i < d_->layers.size(); i++) {
     ncnn::Layer *layer = d_->layers[i];
 
@@ -694,22 +697,12 @@ int Net::load_model(const ncnn::DataReader &dr) {
       break;
     }
 
-    int lret = layer->load_model(mb);
+    int lret = layer->load_model(mb);  // 从文件中读如
     if (lret != 0) {
       NCNN_LOGE("layer load_model %d failed", (int )i);
       ret = -1;
       break;
     }
-
-    /*
-    if (layer->use_int8_inference) {
-      // no int8 gpu or packing layout support yet
-      opt.use_vulkan_compute = false;
-      opt.use_packing_layout = false;
-      opt.use_fp16_storage = false;
-      opt.use_bf16_storage = false;
-    }
-    */
   }
 
   // d_->fuse_network();  // 里面有requant相关的东东，但是我用不上
@@ -741,9 +734,16 @@ int Net::load_model(const ncnn::DataReader &dr) {
 
 }  // namespace ncnn_M
 
-int test() {
-  char name[] = "test";
-  GLogHelper gh(name);
+int test(const char* out_dir) {
+  GLogHelper gh("");
+
+  // 确保out_dir是空文件夹且可以重建
+  namespace fs = std::filesystem;
+  if(fs::exists(fs::path(out_dir))) {
+    std::cout << out_dir << " exists! \n";
+    fs::remove_all(fs::path(out_dir));
+  }
+  fs::create_directory(fs::path(out_dir));
 
   ncnn_M::Net net;
   int ret;
@@ -754,11 +754,14 @@ int test() {
   ret = net.load_model("../data/model/mobilenetv2_f32/mobilenet_v2_f32.bin");
   std::cout << "net.load_model() -> " << ret << std::endl;
 
+  std::cout << "__cplusplus: " << __cplusplus << std::endl;
+
   return EXIT_SUCCESS;
 }
 
 int main() {
-  int r = test();
+  const char out_dir[] = "ncnn_micro_out";
+  int r = test(out_dir);
 
   return r;
 }
