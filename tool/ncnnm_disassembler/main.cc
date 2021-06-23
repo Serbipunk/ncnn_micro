@@ -2,6 +2,7 @@
 #include <fstream>
 
 #include <vector>
+#include <string>
 
 #include <glog/logging.h>
 
@@ -10,6 +11,8 @@
 #include "ncnn/net.h"
 #include "ncnn/layer_type.h"
 #include "ncnn/datareader.h"  // DataReaderFromStdio
+
+std::string raw_model_profile_path("raw_model_profile.txt");  // name of raw_profile_path
 
 //将信息输出到单独的文件和 LOG(ERROR)
 void SignalHandle(const char *data, int size) {
@@ -38,6 +41,234 @@ class GLogHelper {
 };
 
 namespace ncnn_M {
+
+class ModelBinFromDataReaderPrivate {
+ public:
+  ModelBinFromDataReaderPrivate(const ncnn::DataReader &_dr)
+      :
+      dr(_dr) {
+  }
+  const ncnn::DataReader &dr;
+};
+
+// rewrite this class (specially .load()) to export ncnn_bin contents
+class ModelBinFromDataReader : public ncnn::ModelBin {
+ public:
+  explicit ModelBinFromDataReader(const ncnn::DataReader &dr);
+  virtual ~ModelBinFromDataReader();
+
+  virtual ncnn::Mat load(int w, int type) const;  //
+
+ private:
+  ModelBinFromDataReader(const ModelBinFromDataReader&);
+  ModelBinFromDataReader& operator=(const ModelBinFromDataReader&);
+
+ private:
+  ncnn_M::ModelBinFromDataReaderPrivate *const d;
+};
+
+ModelBinFromDataReader::ModelBinFromDataReader(const ncnn::DataReader &_dr)
+    :
+    ModelBin(),
+    d(new ncnn_M::ModelBinFromDataReaderPrivate(_dr)) {
+}
+
+ModelBinFromDataReader::~ModelBinFromDataReader() {
+  delete d;
+}
+
+ModelBinFromDataReader::ModelBinFromDataReader(const ModelBinFromDataReader&)
+    :
+    d(0) {
+}
+
+ModelBinFromDataReader& ModelBinFromDataReader::operator=(
+    const ModelBinFromDataReader&) {
+  return *this;
+}
+
+ncnn::Mat ModelBinFromDataReader::load(int w, int type) const {  // read layer's weights from xxmodel.bin
+  std::ofstream ofile(raw_model_profile_path, std::ios::out | std::ios::app);
+  ofile << "    ModelBinFromDataReader->load(" << w << ", " << type << ")";
+
+  if (type == 0) {  // todo: 一句话解释一下这个
+    size_t nread;
+
+    union {
+      struct {
+        unsigned char f0;
+        unsigned char f1;
+        unsigned char f2;
+        unsigned char f3;
+      };
+      unsigned int tag;
+    } flag_struct;
+
+    nread = d->dr.read(&flag_struct, sizeof(flag_struct));   // 先读flag_struct
+    ofile << "seg(" << sizeof(flag_struct) << ") ";
+    if (nread != sizeof(flag_struct)) {
+      NCNN_LOGE("ModelBin read flag_struct failed %zd", nread);
+      ofile << "\n";
+      ofile.close();
+      return ncnn::Mat();
+    }
+
+    unsigned int flag = flag_struct.f0 + flag_struct.f1 + flag_struct.f2
+        + flag_struct.f3;  // 我去，还得相加。。。生成flag
+
+    if (flag_struct.tag == 0x01306B47)  // 应该是float16相关
+        {
+      // half-precision data
+      size_t align_data_size = ncnn::alignSize(w * sizeof(unsigned short), 4);
+      std::vector<unsigned short> float16_weights;
+      float16_weights.resize(align_data_size);
+      nread = d->dr.read(float16_weights.data(), align_data_size);   // 实际读取数量
+      ofile << "tag == 0x01306B47 seg(" << align_data_size << ") ";
+
+      if (nread != align_data_size) {
+        NCNN_LOGE("ModelBin read float16_weights failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+
+      ofile << "\n";
+      ofile.close();
+      return ncnn::Mat::from_float16(float16_weights.data(), w);
+    } else if (flag_struct.tag == 0x000D4B38)  // 应该是int8相关
+        {
+      // int8 data
+      size_t align_data_size = ncnn::alignSize(w, 4);
+      std::vector<signed char> int8_weights;
+      int8_weights.resize(align_data_size);
+      nread = d->dr.read(int8_weights.data(), align_data_size);    // 实际读取数量
+      ofile << "tag == 0x000D4B38 seg(" << align_data_size << ") ";
+      if (nread != align_data_size) {
+        NCNN_LOGE("ModelBin read int8_weights failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+
+      ncnn::Mat m(w, (size_t) 1u);
+      if (m.empty()) {      // 难道是无法分配出来?
+        ofile << "\n";
+        ofile.close();
+        return m;
+      }
+
+      memcpy(m.data, int8_weights.data(), w);
+
+      return m;
+    } else if (flag_struct.tag == 0x0002C056)  // 应该是正常？读入的也是没有align的数值
+        {
+      ncnn::Mat m(w);
+      if (m.empty()) {
+        ofile << "\n";
+        ofile.close();
+        return m;
+      }
+
+      // raw data with extra scaling
+      nread = d->dr.read(m, w * sizeof(float));
+      ofile << "tag == 0x0002C056 seg(" << w * sizeof(float) << ") ";
+      if (nread != w * sizeof(float)) {
+        NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+
+      ofile << "\n";
+      ofile.close();
+      return m;
+    }
+
+    ncnn::Mat m(w);
+    if (m.empty()) {
+      ofile << "\n";
+      ofile.close();
+      return m;
+    }
+
+    if (flag != 0)    // 要做量化
+        {
+      // quantized data
+      float quantization_value[256];    // 量化表
+      nread = d->dr.read(quantization_value, 256 * sizeof(float));
+      ofile << "flag!=0 seg(" << 256 * sizeof(float) << ") ";
+      if (nread != 256 * sizeof(float)) {
+        NCNN_LOGE("ModelBin read quantization_value failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+
+      size_t align_weight_data_size = ncnn::alignSize(w * sizeof(unsigned char),
+                                                      4);
+      std::vector<unsigned char> index_array;
+      index_array.resize(align_weight_data_size);
+      nread = d->dr.read(index_array.data(), align_weight_data_size);
+      ofile << "seg(" << align_weight_data_size << ") ";
+      if (nread != align_weight_data_size) {
+        NCNN_LOGE("ModelBin read index_array failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+
+      float *ptr = m;
+      for (int i = 0; i < w; i++) {
+        ptr[i] = quantization_value[index_array[i]];
+      }
+    } else if (flag_struct.f0 == 0) {
+      // raw data
+      nread = d->dr.read(m, w * sizeof(float));    // 也是读取没有align的输入数据
+      ofile << "flag_struct.f0 == 0 seg(" << w * sizeof(float) << ") ";
+      if (nread != w * sizeof(float)) {
+        NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
+        ofile << "\n";
+        ofile.close();
+        return ncnn::Mat();
+      }
+    }
+
+    ofile << "\n";
+    ofile.close();
+    return m;
+  } else if (type == 1) {
+    ncnn::Mat m(w);   // 应该是w是0
+    if (m.empty()) {
+      ofile << "w = " << w << " early STOP\n";
+      ofile.close();
+      return m;
+    }
+
+    // raw data
+    size_t nread = d->dr.read(m, w * sizeof(float));    // 读入的是直接float
+    ofile << "type == 1 seg(" << w * sizeof(float) << ") ";
+    if (nread != w * sizeof(float)) {
+      NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
+      ofile << "\n";
+      ofile.close();
+      return ncnn::Mat();
+    }
+
+    ofile << "\n";
+    ofile.close();
+    return m;
+  } else  // 其他的type
+  {
+    NCNN_LOGE("ModelBin load type %d not implemented", type);
+    ofile << "\n";
+    ofile.close();
+    return ncnn::Mat();
+  }
+
+  ofile << "\n";
+  ofile.close();
+  return ncnn::Mat();
+}
 
 class ParamDictPrivate {
  public:
@@ -515,18 +746,18 @@ int Net::load_param(const ncnn::DataReader &dr) {
       return -1;
     }
     /*
-    if (layer->use_int8_inference) {
-      // no int8 gpu or packing layout support yet
-      opt.use_vulkan_compute = false;
-      opt.use_packing_layout = false;
-      opt.use_fp16_storage = false;
-      opt.use_bf16_storage = false;
-    }
+     if (layer->use_int8_inference) {
+     // no int8 gpu or packing layout support yet
+     opt.use_vulkan_compute = false;
+     opt.use_packing_layout = false;
+     opt.use_fp16_storage = false;
+     opt.use_bf16_storage = false;
+     }
 
-#if NCNN_VULKAN
-      if (opt.use_vulkan_compute)
-          layer->vkdev = d->vkdev;
-#endif // NCNN_VULKAN
+     #if NCNN_VULKAN
+     if (opt.use_vulkan_compute)
+     layer->vkdev = d->vkdev;
+     #endif // NCNN_VULKAN
      */
 
     layer->type = std::string(layer_type);
@@ -684,9 +915,13 @@ int Net::load_model(const ncnn::DataReader &dr) {
   // load file
   int ret = 0;
 
-  ncnn::ModelBinFromDataReader mb(dr);    // todo: ncnn_m::MB replace ncnn::MB
-  for (size_t i = 0; i < d_->layers.size(); i++) {
+  ncnn_M::ModelBinFromDataReader mb(dr);
+  for (size_t i = 0; i < d_->layers.size(); i++) {  // browse all layers
     ncnn::Layer *layer = d_->layers[i];
+
+    std::ofstream ofile(raw_model_profile_path, std::ios::out | std::ios::app);
+    ofile << "Layer " << layer->type << "(" << layer->name << ")\n";
+    ofile.close();
 
     //Here we found inconsistent content in the parameter file.
     if (!layer) {
@@ -734,16 +969,18 @@ int Net::load_model(const ncnn::DataReader &dr) {
 
 }  // namespace ncnn_M
 
-int test(const char* out_dir) {
+int test(const char *out_dir) {
   GLogHelper gh("");
 
-  // 确保out_dir是空文件夹且可以重建
+  // ensure out_dir is brandly new
   namespace fs = std::filesystem;
-  if(fs::exists(fs::path(out_dir))) {
+  if (fs::exists(fs::path(out_dir))) {
     std::cout << out_dir << " exists! \n";
     fs::remove_all(fs::path(out_dir));
   }
   fs::create_directory(fs::path(out_dir));
+  // put raw_profile_path in out_dir
+  raw_model_profile_path = (fs::path(out_dir) / fs::path(raw_model_profile_path)).string();
 
   ncnn_M::Net net;
   int ret;
@@ -754,8 +991,7 @@ int test(const char* out_dir) {
   ret = net.load_model("../data/model/mobilenetv2_f32/mobilenet_v2_f32.bin");
   std::cout << "net.load_model() -> " << ret << std::endl;
 
-  std::cout << "__cplusplus: " << __cplusplus << std::endl;
-
+  // std::cout << "__cplusplus: " << __cplusplus << std::endl;
   return EXIT_SUCCESS;
 }
 
