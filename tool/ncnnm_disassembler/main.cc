@@ -12,6 +12,8 @@
 #include "ncnn/layer_type.h"
 #include "ncnn/datareader.h"  // DataReaderFromStdio
 
+#include "nm_layer_list.hh"
+
 std::string raw_model_profile_path("raw_model_profile.txt");  // name of raw_profile_path
 
 //将信息输出到单独的文件和 LOG(ERROR)
@@ -996,7 +998,9 @@ int test(const char *out_dir) {
 }
 
 int main() {
+    NM_LAYER_LIST ll;
   const char out_dir[] = "ncnn_micro_out";
+
   int r = test(out_dir);
 
   return r;
