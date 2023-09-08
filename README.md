@@ -11,9 +11,10 @@ features in the plan:
 * layer inference data-type convertion (f32, f16, int8, ...)
 * cli interactive ui (maybe use PyInquirer)
 
-## developing specs
 
-* ubuntu 20.04 
+## developing environment specs
+
+* ubuntu 20.04 / 22.04
 * g++ capable with c++17
 * ncnn shared library
-* glog (apt install)
+* glog, rapidjson 

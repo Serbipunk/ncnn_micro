@@ -15,6 +15,7 @@
 #include "nm_layer_list.hh"
 
 std::string raw_model_profile_path("raw_model_profile.txt");  // name of raw_profile_path
+NM_LAYER_LIST ll;  // info json object
 
 //将信息输出到单独的文件和 LOG(ERROR)
 void SignalHandle(const char *data, int size) {
@@ -924,6 +925,7 @@ int Net::load_model(const ncnn::DataReader &dr) {
     std::ofstream ofile(raw_model_profile_path, std::ios::out | std::ios::app);
     ofile << "Layer " << layer->type << "(" << layer->name << ")\n";
     ofile.close();
+    ll.add_layer_info({std::pair<std::string, std::string>("layer", layer->type)});
 
     //Here we found inconsistent content in the parameter file.
     if (!layer) {
@@ -974,7 +976,7 @@ int Net::load_model(const ncnn::DataReader &dr) {
 int test(const char *out_dir) {
   GLogHelper gh("");
 
-  // ensure out_dir is brandly new
+    // ensure out_dir is brandly new
   namespace fs = std::filesystem;
   if (fs::exists(fs::path(out_dir))) {
     std::cout << out_dir << " exists! \n";
@@ -993,12 +995,13 @@ int test(const char *out_dir) {
   ret = net.load_model("../data/model/mobilenetv2_f32/mobilenet_v2_f32.bin");
   std::cout << "net.load_model() -> " << ret << std::endl;
 
-  // std::cout << "__cplusplus: " << __cplusplus << std::endl;
+  std::string json_str;
+  ll.dumps(json_str);
+   std::cout << "__cplusplus: " << __cplusplus << std::endl;
   return EXIT_SUCCESS;
 }
 
 int main() {
-    NM_LAYER_LIST ll;
   const char out_dir[] = "ncnn_micro_out";
 
   int r = test(out_dir);
