@@ -4,6 +4,9 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <stdexcept>
+#include <fstream>
+
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
 #include <rapidjson/stringbuffer.h>
@@ -28,10 +31,11 @@ class NM_LAYER_LIST {
     }
     int loadf(const char *filename);
     int dumps(string &json_str) {
-        try {
+        try {  // https://medium.com/codeflu/understanding-rapidjson-e7fbf62492ba
             StringBuffer s;
             Document d;
             PrettyWriter<StringBuffer> writer(s);
+            writer.SetFormatOptions(rapidjson::PrettyFormatOptions::kFormatSingleLineArray);
             writer.StartArray();
             for(auto& layer_info: layer_list) {
                 writer.StartArray();
@@ -45,7 +49,7 @@ class NM_LAYER_LIST {
             }
             writer.EndArray();
 
-//            std::cout << "result: \n" << s.GetString() << "\n";
+            json_str = string(s.GetString());
         } catch (const std::exception &e) {
             LOG(ERROR) << "Error: " << e.what();
             return EXIT_FAILURE;
@@ -54,9 +58,15 @@ class NM_LAYER_LIST {
     }
 
     int dumpf(const char *filename) {
-        std::string json_str;
         try {
-            int ret_code = dumps(json_str);
+            std::string json_str;
+            int dumps_rcode = dumps(json_str);
+            if(dumps_rcode == EXIT_FAILURE) {
+                throw std::runtime_error("NM_LAYER_LIST.dumps() error");
+            }
+            std::ofstream ofile(filename, std::ios::out);
+            ofile << json_str;
+            ofile.close();
         }
         catch (const std::exception &e) {
             LOG(ERROR) << "Error: " << e.what();
@@ -65,15 +75,22 @@ class NM_LAYER_LIST {
         return EXIT_SUCCESS;
     }
 
-    int add_layer_info(const vector<pair<string, string> > &layer_info) {
-        layer_list.push_back(vector<pair<string, string> >({{"id", std::to_string(layer_num)}}));
+    int amend_layer_info(const vector<pair<string, string> > &layer_info) {
+        if(layer_list.size() <= 0) {
+            LOG(WARNING) << "amend an uninitialized vector \n";
+            return EXIT_FAILURE;
+        }
         auto &cur_layer_info = layer_list.back();
         cur_layer_info.insert(cur_layer_info.end(), layer_info.begin(), layer_info.end());
-      ++layer_num;
-      return 0;
+        return EXIT_SUCCESS;
     }
 
-    int admend_layer_info();
+    int add_layer_info(const vector<pair<string, string> > &layer_info) {
+        layer_list.push_back(vector<pair<string, string> >({{"id", std::to_string(layer_num)}}));
+      ++layer_num;
+        amend_layer_info(layer_info);
+      return EXIT_SUCCESS;
+    }
 
   public:
     std::vector<vector<pair<string, string>>> layer_list;
