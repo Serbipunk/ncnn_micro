@@ -102,11 +102,14 @@ namespace ncnn_M {
 
         std::string bin_prefix = std::string("@bin") + std::to_string(bin_id) + "@";
         ++bin_id;
-        std::vector<std::string> bin_data_ks, bin_data_vs;
-        bin_data_ks.push_back(bin_prefix + "nbytes");
-        bin_data_vs.push_back(std::to_string(w));
-        bin_data_ks.push_back(bin_prefix + "type");
-        bin_data_vs.push_back(std::to_string(type));
+//        std::vector<std::string> bin_data_ks, bin_data_vs;
+//        bin_data_ks.push_back(bin_prefix + "nbytes");
+//        bin_data_vs.push_back(std::to_string(w));
+//        bin_data_ks.push_back(bin_prefix + "type");
+//        bin_data_vs.push_back(std::to_string(type));
+        std::vector<std::pair<std::string, std::string>> bin_data_kv;
+        bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes", std::to_string(w)));
+        bin_data_kv.push_back(std::make_pair(bin_prefix+"type", std::to_string(type)));
 
         if (type == 0) {  // todo: 一句话解释一下这个
             size_t nread;
@@ -127,6 +130,8 @@ namespace ncnn_M {
                 NCNN_LOGE("ModelBin read flag_struct failed %zd", nread);
                 ofile << "\n";
                 ofile.close();
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "4bytes_tag_early_fend"));
+                ll.amend_layer_info(bin_data_kv);
                 return ncnn::Mat();
             }
 
@@ -135,36 +140,47 @@ namespace ncnn_M {
 
             if (flag_struct.tag == 0x01306B47)  // 应该是float16相关
             {
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag", "0x01306B47"));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "fp16"));
                 // half-precision data
                 size_t align_data_size = ncnn::alignSize(w * sizeof(unsigned short), 4);
                 std::vector<unsigned short> float16_weights;
                 float16_weights.resize(align_data_size);
                 nread = d->dr.read(float16_weights.data(), align_data_size);   // 实际读取数量
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_aligned", std::to_string(align_data_size)));
+
                 ofile << "tag == 0x01306B47 seg(" << align_data_size << ") ";
 
                 if (nread != align_data_size) {
                     NCNN_LOGE("ModelBin read float16_weights failed %zd", nread);
                     ofile << "\n";
                     ofile.close();
+                    bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "bin_data_early_fend"));
+                    ll.amend_layer_info(bin_data_kv);
                     return ncnn::Mat();
                 }
 
                 ofile << "\n";
                 ofile.close();
+                ll.amend_layer_info(bin_data_kv);
                 return ncnn::Mat::from_float16(float16_weights.data(), w);
             }
             else if (flag_struct.tag == 0x000D4B38)  // 应该是int8相关
             {
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag", "0x000D4B38"));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "int8"));
                 // int8 data
                 size_t align_data_size = ncnn::alignSize(w, 4);
                 std::vector<signed char> int8_weights;
                 int8_weights.resize(align_data_size);
                 nread = d->dr.read(int8_weights.data(), align_data_size);    // 实际读取数量
                 ofile << "tag == 0x000D4B38 seg(" << align_data_size << ") ";
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_aligned", std::to_string(align_data_size)));
                 if (nread != align_data_size) {
                     NCNN_LOGE("ModelBin read int8_weights failed %zd", nread);
                     ofile << "\n";
                     ofile.close();
+                    bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "bin_data_early_fend"));
                     return ncnn::Mat();
                 }
 
@@ -180,6 +196,8 @@ namespace ncnn_M {
                 return m;
             } else if (flag_struct.tag == 0x0002C056)  // 应该是正常？读入的也是没有align的数值
             {
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag", "0x0002C056"));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "float"));
                 ncnn::Mat m(w);
                 if (m.empty()) {
                     ofile << "\n";
@@ -190,15 +208,19 @@ namespace ncnn_M {
                 // raw data with extra scaling
                 nread = d->dr.read(m, w * sizeof(float));
                 ofile << "tag == 0x0002C056 seg(" << w * sizeof(float) << ") ";
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_aligned", std::to_string(align_data_size)));
                 if (nread != w * sizeof(float)) {
                     NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
                     ofile << "\n";
                     ofile.close();
+                    bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "bin_data_early_fend"));
+                    ll.amend_layer_info(bin_data_kv);
                     return ncnn::Mat();
                 }
 
                 ofile << "\n";
                 ofile.close();
+                ll.amend_layer_info(bin_data_kv);
                 return m;
             }
 
@@ -209,21 +231,28 @@ namespace ncnn_M {
                 return m;
             }
 
-            if (flag != 0)    // 要做量化
+            if (flag != 0)    // 要做量化  seems like new version (static quant)
             {
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"flag", "!0"));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"flag_comment", "quant"));
+
                 // quantized data
                 float quantization_value[256];    // 量化表
                 nread = d->dr.read(quantization_value, 256 * sizeof(float));
                 ofile << "flag!=0 seg(" << 256 * sizeof(float) << ") ";
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_quant_value", std::to_string(256 * sizeof(float))));
                 if (nread != 256 * sizeof(float)) {
                     NCNN_LOGE("ModelBin read quantization_value failed %zd", nread);
                     ofile << "\n";
                     ofile.close();
+                    bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "quant_table_early_fend"));
+                    ll.amend_layer_info(bin_data_kv);
                     return ncnn::Mat();
                 }
 
                 size_t align_weight_data_size = ncnn::alignSize(w * sizeof(unsigned char),
                                                                 4);
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_weight_data", std::to_string(w * sizeof(unsigned char))));
                 std::vector<unsigned char> index_array;
                 index_array.resize(align_weight_data_size);
                 nread = d->dr.read(index_array.data(), align_weight_data_size);
@@ -232,18 +261,21 @@ namespace ncnn_M {
                     NCNN_LOGE("ModelBin read index_array failed %zd", nread);
                     ofile << "\n";
                     ofile.close();
+                    bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "weight_data_early_fend"));
                     return ncnn::Mat();
                 }
 
                 float *ptr = m;
                 for (int i = 0; i < w; i++) {
-                    ptr[i] = quantization_value[index_array[i]];
+                    ptr[i] = quantization_value[index_array[i]];  // recover uint8 to float
                 }
             }
             else if (flag_struct.f0 == 0) {
                 // raw data
                 nread = d->dr.read(m, w * sizeof(float));    // 也是读取没有align的输入数据
                 ofile << "flag_struct.f0 == 0 seg(" << w * sizeof(float) << ") ";
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"flag", ""));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "fp16"));
                 if (nread != w * sizeof(float)) {
                     NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
                     ofile << "\n";
@@ -257,6 +289,8 @@ namespace ncnn_M {
             return m;
         }
         else if (type == 1) {
+            bin_data_kv.push_back(std::make_pair(bin_prefix+"flag", "0"));
+            bin_data_kv.push_back(std::make_pair(bin_prefix+"flag_comment", "direct"));
             ncnn::Mat m(w);   // 应该是w是0
             if (m.empty()) {
                 ofile << "w = " << w << " early STOP\n";
