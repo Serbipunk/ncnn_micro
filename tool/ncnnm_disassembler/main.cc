@@ -208,7 +208,7 @@ namespace ncnn_M {
                 // raw data with extra scaling
                 nread = d->dr.read(m, w * sizeof(float));
                 ofile << "tag == 0x0002C056 seg(" << w * sizeof(float) << ") ";
-                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_aligned", std::to_string(align_data_size)));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_aligned", std::to_string(w * sizeof(float))));
                 if (nread != w * sizeof(float)) {
                     NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
                     ofile << "\n";
@@ -275,7 +275,7 @@ namespace ncnn_M {
                 nread = d->dr.read(m, w * sizeof(float));    // 也是读取没有align的输入数据
                 ofile << "flag_struct.f0 == 0 seg(" << w * sizeof(float) << ") ";
                 bin_data_kv.push_back(std::make_pair(bin_prefix+"flag", ""));
-                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "fp16"));
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"tag_comment", "fp32"));
                 if (nread != w * sizeof(float)) {
                     NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
                     ofile << "\n";
@@ -284,6 +284,7 @@ namespace ncnn_M {
                 }
             }
 
+            ll.amend_layer_info(bin_data_kv);
             ofile << "\n";
             ofile.close();
             return m;
@@ -295,21 +296,28 @@ namespace ncnn_M {
             if (m.empty()) {
                 ofile << "w = " << w << " early STOP\n";
                 ofile.close();
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "mat malloc"));
+                ll.amend_layer_info(bin_data_kv);
                 return m;
             }
+            bin_data_kv.push_back(std::make_pair(bin_prefix+"nbytes_weight_data", std::to_string(w * sizeof(float))));
 
             // raw data
             size_t nread = d->dr.read(m, w * sizeof(float));    // 读入的是直接float
             ofile << "type == 1 seg(" << w * sizeof(float) << ") ";
+
             if (nread != w * sizeof(float)) {
                 NCNN_LOGE("ModelBin read weight_data failed %zd", nread);
                 ofile << "\n";
                 ofile.close();
+                bin_data_kv.push_back(std::make_pair(bin_prefix+"error", "weight_data_early_fend"));
+                ll.amend_layer_info(bin_data_kv);
                 return ncnn::Mat();
             }
 
             ofile << "\n";
             ofile.close();
+            ll.amend_layer_info(bin_data_kv);
             return m;
         }
         else  // 其他的type
